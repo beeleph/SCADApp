@@ -1,55 +1,119 @@
-#include <prometheus/counter.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
-
-#include <QMainWindow>
-#include <QModbusTCPClient>
+#include <QCoreApplication>
+#include <QModbusTcpClient>
+#include <QModbusDataUnit>
 #include <QVariant>
+#include <QTimer>
 
-#include <array>
-#include <chrono>
-#include <cstdlib>
-#include <memory>
-#include <string>
-#include <thread>
+#include <QModbusTcpServer>
+
+//#include <array>
+//#include <chrono>
+//#include <cstdlib>
+//#include <memory>
+//#include <string>
+//#include <thread>
 
 #include <iostream>
 
-class Panel : QObject {
+//using namespace std;
+
+// разделить на хедер и спп.
+// протестировать промлибу тут
+// попробовать qt plugin для вскод?
+
+class Panel : public QObject {
+    Q_OBJECT
+// bybre
+
   private:
-    int modbusSlaveID = 0; 
-    std::string ip; 
-    QString ip;
+    int modbusSlaveID = 0;
+    std::string ip;
+    float gammaDoze = 0.0;
+    float netronDoze = 0.0;
+    //QString ip;
     QModbusTcpClient *modbus = nullptr;
-    QModbusDataUnit *gamma = nullptr;
-    QModbusDataUnit *neutron = nullptr;
+    QModbusDataUnit *gammaNeutron = nullptr;
+    //QModbusDataUnit *neutron = nullptr;
+    QTimer *readLoopTimer;
+
+  private slots:
+    void onReadReady(QModbusReply* reply);
+    void loop_goBabe();
+
+  signals:
+    void readFinished(QModbusReply* reply);
+
   public:
      int var;     // data member
-  Panel(int modbusSlaveID, std::string ip) {        
+
+  Panel(int modbusSlaveID, std::string ip) {
     this->modbusSlaveID = modbusSlaveID;
-    this->ip = ip;  
+    this->ip = ip;
     modbus = new QModbusTcpClient();
     QObject::connect(modbus, &QModbusClient::errorOccurred, [this](QModbusDevice::Error) {
         std::cout << modbus->errorString().toStdString() << std::endl;
     });
     if (!modbus) {
-        std::cout << "Could not create Modbus master.";
+        std::cout << "Could not create Modbus master." << std::endl;
     }
     const QString a("vasili4");
     modbus->setConnectionParameter(QModbusDevice::NetworkAddressParameter, QString::fromStdString(ip));
     modbus->setConnectionParameter(QModbusDevice::NetworkPortParameter, "502");
     modbus->setTimeout(3000);
     if (!modbus->connectDevice()) {
-      std::cout << "Connect failed: " << modbus->errorString().toStdString();
+      std::cout << "Connect failed: " << modbus->errorString().toStdString() << std::endl;
     }
-    gamma = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 0, 2); // CONFIRM THAT!
-    neutron = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 2, 2);// CONFIRM THAT!
+    gammaNeutron = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 0, 4); // CONFIRM THAT!
+    //neutron = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 2, 2);// CONFIRM THAT!
     QObject::connect(this, SIGNAL(readFinished(QModbusReply*, int)), this, SLOT(onReadReady(QModbusReply*, int)));
-      std::cout << "Hello";
+    std::cout << "Versioning, name, contacts, date" << std::endl;
+    readLoopTimer = new QTimer(this);
+    QObject::connect(readLoopTimer, SIGNAL(timeout()), this, SLOT(loop_goBabe()));
+    readLoopTimer->start(1000);
   }
+
+  // timer go loop go babe
 };
 
+void Panel::loop_goBabe(){
+  if (auto *replyOne = modbus->sendReadRequest(*gammaNeutron, modbusSlaveID)) {
+        if (!replyOne->isFinished())
+            connect(replyOne, &QModbusReply::finished, this, [this, replyOne](){
+                emit readFinished(replyOne);  // read fiinished connects to ReadReady()
+            });
+        else
+            delete replyOne; // broadcast replies return immediately
+    } else {
+        std::cout << "Read error: " + modbus->errorString().toStdString() << std::endl;
+    }
+}
+
+void Panel::onReadReady(QModbusReply* reply){
+  if (!reply)
+      return;
+  if (reply->error() == QModbusDevice::NoError) {
+    const QModbusDataUnit unit = reply->result();
+    unsigned short data[2];
+    data[0] = unit.value(0);
+    data[1] = unit.value(1);
+    memcpy(&gammaDoze, data, 4);
+    if (gammaDoze > 0 & gammaDoze < 0.1)
+        gammaDoze = 0.1;
+    data[0] = unit.value(3);
+    data[1] = unit.value(4);
+    memcpy(&netronDoze, data, 4);
+    if (netronDoze > 0 & netronDoze < 0.1)
+        netronDoze = 0.1;
+  } else if (reply->error() == QModbusDevice::ProtocolError) {
+      std::cout << "Read response error: %1 (Mobus exception: 0x%2)";
+  } else {
+      std::cout << "Read response error: %1 (code: 0x%2)";
+  }
+  reply->deleteLater();
+}
+
 int main() {
+    std::cout << " we... finally... here..." << std::endl;
   /*using namespace prometheus;
 
   // create an http server running on port 8080
@@ -97,8 +161,8 @@ int main() {
 
   // ask the exposer to scrape the registry on incoming HTTP requests
   /*exposer.RegisterCollectable(registry);
-  double doze = 0; 
-  double doze2 = 0; 
+  double doze = 0;
+  double doze2 = 0;
   for (;;) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     const auto random_value = std::rand() / (double)RAND_MAX;
@@ -126,3 +190,5 @@ int main() {
   //}
   return 0;
 }
+
+#include "psTest.moc"
