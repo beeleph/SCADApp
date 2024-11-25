@@ -7,6 +7,7 @@
 #include <QModbusDataUnit>
 #include <QVariant>
 #include <QTimer>
+//#include <QThread>
 
 #include <QModbusTcpServer>
 
@@ -22,8 +23,13 @@
 using namespace std;
 
 // разделить на хедер и спп.
-// протестировать промлибу тут
-// попробовать qt plugin для вскод?
+
+void print(std::string str){
+  std::cout << str << std::endl;
+}
+void print(float str){
+  std::cout << std::to_string(str) << std::endl;
+}
 
 class Panel : public QObject {
     Q_OBJECT
@@ -39,18 +45,23 @@ class Panel : public QObject {
     QModbusDataUnit *gammaNeutron = nullptr;
     //QModbusDataUnit *neutron = nullptr;
     QTimer *readLoopTimer;
+    //QThread mainThread;
 
   private slots:
     void onReadReady(QModbusReply* reply);
     void loop_goBabe();
+    void threadStarted();
 
   signals:
     void readFinished(QModbusReply* reply);
 
   public:
      int var;     // data member
+     float getGammadoze();
+     void start_loop_goBabe();
 
   Panel(int modbusSlaveID, std::string ip) {
+    readLoopTimer = new QTimer(this);
     this->modbusSlaveID = modbusSlaveID;
     this->ip = ip;
     modbus = new QModbusTcpClient();
@@ -69,15 +80,23 @@ class Panel : public QObject {
     }
     gammaNeutron = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 0, 4); // CONFIRM THAT!
     //neutron = new QModbusDataUnit(QModbusDataUnit::InputRegisters, 2, 2);// CONFIRM THAT!
-    QObject::connect(this, SIGNAL(readFinished(QModbusReply*, int)), this, SLOT(onReadReady(QModbusReply*, int)));
+    QObject::connect(this, SIGNAL(readFinished(QModbusReply*)), this, SLOT(onReadReady(QModbusReply*)));
     std::cout << "Versioning, name, contacts, date" << std::endl;
-    readLoopTimer = new QTimer(this);
+    
     QObject::connect(readLoopTimer, SIGNAL(timeout()), this, SLOT(loop_goBabe()));
+    //moveToThread(&mainThread);
+    //readLoopTimer->moveToThread(&mainThread);
+    //QObject::connect(&mainThread, SIGNAL(started()), this, SLOT(threadStarted()));
     readLoopTimer->start(1000);
   }
 };
 
+void Panel::threadStarted(){
+  readLoopTimer->start(1000);
+}
+
 void Panel::loop_goBabe(){
+  std::cout << " loop go babe go!! " << std::endl;
   if (auto *replyOne = modbus->sendReadRequest(*gammaNeutron, modbusSlaveID)) {
         if (!replyOne->isFinished())
             connect(replyOne, &QModbusReply::finished, this, [this, replyOne](){
@@ -90,20 +109,34 @@ void Panel::loop_goBabe(){
     }
 }
 
+void Panel::start_loop_goBabe(){
+  loop_goBabe();
+  //emit readLoopTimer->timeout();
+  
+}
+
 void Panel::onReadReady(QModbusReply* reply){
+  std::cout << " we reading smth!" << std::endl;
   if (!reply)
       return;
   if (reply->error() == QModbusDevice::NoError) {
     const QModbusDataUnit unit = reply->result();
-    unsigned short data[2];
+    std::cout << "u0 = " << unit.value(0) << " u1 = " << unit.value(1) << " u2 = " << unit.value(2) << " u3= " << unit.value(3) << std::endl;
+    //unsigned short data[2];
+    uint16_t data[2];
     data[0] = unit.value(0);
     data[1] = unit.value(1);
-    memcpy(&gammaDoze, data, 4);
+    //data[0] = 19564;
+    //data[1] = 32536;
+    // after this working fine!
+    memcpy(&gammaDoze, data, 4); 
+    print(gammaDoze);
     if (gammaDoze > 0 & gammaDoze < 0.1)
         gammaDoze = 0.1;
-    data[0] = unit.value(3);
-    data[1] = unit.value(4);
+    data[0] = unit.value(2);
+    data[1] = unit.value(3);
     memcpy(&netronDoze, data, 4);
+    print(netronDoze);
     if (netronDoze > 0 & netronDoze < 0.1)
         netronDoze = 0.1;
   } else if (reply->error() == QModbusDevice::ProtocolError) {
@@ -112,10 +145,15 @@ void Panel::onReadReady(QModbusReply* reply){
       std::cout << "Read response error: %1 (code: 0x%2)";
   }
   reply->deleteLater();
+  //
+  //print(netronDoze);
 }
 
-int main() {
-  std::cout << "vasili4" << std::endl;
+float Panel::getGammadoze(){
+  return gammaDoze;
+}
+
+void exposerShit(){
   using namespace prometheus;
 
   // create an http server running on port 8080
@@ -125,7 +163,7 @@ int main() {
   // @note it's the users responsibility to keep the object alive
   auto registry = std::make_shared<Registry>();
 
-  auto& doze_gauge = BuildGauge()
+  auto& doze_gauge = BuildGauge() 
                             .Name("Doze_post_one")
                             .Help("doze from first post from neutron and gamma detector")
                             .Register(*registry);
@@ -138,6 +176,7 @@ int main() {
   double doze = 0;
   double doze2 = 0;
   for (;;) {
+    //testPanel->start_loop_goBabe();
     std::this_thread::sleep_for(std::chrono::seconds(1));
     const auto random_value = std::rand() / (double)RAND_MAX;
     if (random_value < 0.5){
@@ -150,9 +189,24 @@ int main() {
     }
     doze_gauge_netron.Set(doze);
     doze_gauge_gamma.Set(doze2);
+    //std::cout << "current gamma is: " << testPanel->getGammadoze() << std::endl;
   }
-  std::cout << "till the end of times " << std::endl;
-  return 0;
+}
+
+
+
+int main(int argc, char *argv[]) {
+  QCoreApplication a(argc, argv);
+  print("begin");
+  Panel *testPanel = new Panel(1, "192.168.0.10");
+  print("panel done]");
+  //for(;;){
+    //std::this_thread::sleep_for(std::chrono::seconds(1)); // убрать это при работе с qcoreapp !!! и цикл бесконечный не нужен. а что раз в секунду выполнять это можно через таймера. и нужно через таймера. 
+    //testPanel->start_loop_goBabe();
+    //std::cout << testPanel->getGammadoze() << std::endl;
+  //}
+  print("hello");
+  return a.exec();
 }
 
 #include "psTest.moc"
