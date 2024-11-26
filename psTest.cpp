@@ -21,25 +21,25 @@
 #include <iostream>
 
 using namespace std;
+using namespace prometheus;
 
 // разделить на хедер и спп.
 
 void print(std::string str){
-  std::cout << str << std::endl;
+  cout << str << endl;
 }
 void print(float str){
-  std::cout << std::to_string(str) << std::endl;
+  cout << std::to_string(str) << endl;
 }
 
 class Panel : public QObject {
     Q_OBJECT
-// bybre
 
   private:
     int modbusSlaveID = 0;
-    std::string ip;
+    string ip;
     float gammaDoze = 0.0;
-    float netronDoze = 0.0;
+    float neutronDoze = 0.0;
     //QString ip;
     QModbusTcpClient *modbus = nullptr;
     QModbusDataUnit *gammaNeutron = nullptr;
@@ -47,31 +47,34 @@ class Panel : public QObject {
     QTimer *readLoopTimer;
     //QThread mainThread;
 
+    Gauge *doze_gauge_neutron;
+    Gauge *doze_gauge_gamma;
+    double test_doze = 0;
+    double test_doze2 = 0;
+    
+
   private slots:
     void onReadReady(QModbusReply* reply);
-    void loop_goBabe();
-    void threadStarted();
+    void loop_goBabe();;
 
   signals:
     void readFinished(QModbusReply* reply);
 
   public:
-     int var;     // data member
      float getGammadoze();
-     void start_loop_goBabe();
 
-  Panel(int modbusSlaveID, std::string ip) {
+  Panel(int modbusSlaveID, string ip, string name, std::shared_ptr<prometheus::Registry> reg) {
+      // modbus stuff
     readLoopTimer = new QTimer(this);
     this->modbusSlaveID = modbusSlaveID;
     this->ip = ip;
     modbus = new QModbusTcpClient();
     QObject::connect(modbus, &QModbusClient::errorOccurred, [this](QModbusDevice::Error) {
-        std::cout << modbus->errorString().toStdString() << std::endl;
+        cout << modbus->errorString().toStdString() << std::endl;
     });
     if (!modbus) {
-        std::cout << "Could not create Modbus master." << std::endl;
+        cout << "Could not create Modbus master." << std::endl;
     }
-    const QString a("vasili4");
     modbus->setConnectionParameter(QModbusDevice::NetworkAddressParameter, QString::fromStdString(ip));
     modbus->setConnectionParameter(QModbusDevice::NetworkPortParameter, "502");
     modbus->setTimeout(3000);
@@ -88,12 +91,18 @@ class Panel : public QObject {
     //readLoopTimer->moveToThread(&mainThread);
     //QObject::connect(&mainThread, SIGNAL(started()), this, SLOT(threadStarted()));
     readLoopTimer->start(1000);
+      // prometheus stuff
+    auto& doze_gauge = BuildGauge() 
+                            .Name("Doze_post_" + name)
+                            .Help("Doze from post from neutron and gamma detector")
+                            .Register(*reg);
+
+    auto& nd = doze_gauge.Add({{"Neutron_doze", "mZvt"}});
+    auto& gd = doze_gauge.Add({{"Gamma_doze", "mZvt"}});
+    doze_gauge_neutron = &nd;
+    doze_gauge_gamma = &gd;
   }
 };
-
-void Panel::threadStarted(){
-  readLoopTimer->start(1000);
-}
 
 void Panel::loop_goBabe(){
   std::cout << " loop go babe go!! " << std::endl;
@@ -106,13 +115,18 @@ void Panel::loop_goBabe(){
             delete replyOne; // broadcast replies return immediately
     } else {
         std::cout << "Read error: " + modbus->errorString().toStdString() << std::endl;
-    }
-}
-
-void Panel::start_loop_goBabe(){
-  loop_goBabe();
-  //emit readLoopTimer->timeout();
-  
+  }
+  const auto random_value = std::rand() / (double)RAND_MAX;
+  if (random_value < 0.5){
+    test_doze -= random_value;
+    test_doze2 -= random_value;
+  }
+  else{
+    test_doze += random_value;
+    test_doze2 += random_value * 2;
+  }
+  doze_gauge_neutron->Set(test_doze);
+  doze_gauge_gamma->Set(test_doze2);
 }
 
 void Panel::onReadReady(QModbusReply* reply){
@@ -122,90 +136,53 @@ void Panel::onReadReady(QModbusReply* reply){
   if (reply->error() == QModbusDevice::NoError) {
     const QModbusDataUnit unit = reply->result();
     std::cout << "u0 = " << unit.value(0) << " u1 = " << unit.value(1) << " u2 = " << unit.value(2) << " u3= " << unit.value(3) << std::endl;
-    //unsigned short data[2];
     uint16_t data[2];
     data[0] = unit.value(0);
     data[1] = unit.value(1);
-    //data[0] = 19564;
-    //data[1] = 32536;
-    // after this working fine!
     memcpy(&gammaDoze, data, 4); 
     print(gammaDoze);
     if (gammaDoze > 0 & gammaDoze < 0.1)
         gammaDoze = 0.1;
     data[0] = unit.value(2);
     data[1] = unit.value(3);
-    memcpy(&netronDoze, data, 4);
-    print(netronDoze);
-    if (netronDoze > 0 & netronDoze < 0.1)
-        netronDoze = 0.1;
+    memcpy(&neutronDoze, data, 4);
+    print(neutronDoze);
+    if (neutronDoze > 0 & neutronDoze < 0.1)
+        neutronDoze = 0.1;
   } else if (reply->error() == QModbusDevice::ProtocolError) {
       std::cout << "Read response error: %1 (Mobus exception: 0x%2)";
   } else {
       std::cout << "Read response error: %1 (code: 0x%2)";
   }
   reply->deleteLater();
-  //
-  //print(netronDoze);
 }
 
 float Panel::getGammadoze(){
   return gammaDoze;
 }
 
-void exposerShit(){
-  using namespace prometheus;
-
-  // create an http server running on port 8080
-  Exposer exposer{"127.0.0.1:8080"};
-  std::cout << "after exposer there is no life! " << std::endl;
-  // create a metrics registry
-  // @note it's the users responsibility to keep the object alive
-  auto registry = std::make_shared<Registry>();
-
-  auto& doze_gauge = BuildGauge() 
-                            .Name("Doze_post_one")
-                            .Help("doze from first post from neutron and gamma detector")
-                            .Register(*registry);
-
-  auto& doze_gauge_netron = doze_gauge.Add({{"Netron_doze", "mZvt"}});
-  auto& doze_gauge_gamma = doze_gauge.Add({{"Gamma_doze", "mZvt"}});
-
-  // ask the exposer to scrape the registry on incoming HTTP requests
-  exposer.RegisterCollectable(registry);
-  double doze = 0;
-  double doze2 = 0;
-  for (;;) {
-    //testPanel->start_loop_goBabe();
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    const auto random_value = std::rand() / (double)RAND_MAX;
-    if (random_value < 0.5){
-      doze -= random_value;
-      doze2 -= random_value;
-    }
-    else{
-      doze += random_value;
-      doze2 += random_value * 2;
-    }
-    doze_gauge_netron.Set(doze);
-    doze_gauge_gamma.Set(doze2);
-    //std::cout << "current gamma is: " << testPanel->getGammadoze() << std::endl;
-  }
-}
-
-
-
 int main(int argc, char *argv[]) {
   QCoreApplication a(argc, argv);
   print("begin");
-  Panel *testPanel = new Panel(1, "192.168.0.10");
-  print("panel done]");
+  // create an http server running on port 8080
+  Exposer exposer{"127.0.0.1:8080"};
+  std::cout << "After exposer " << std::endl;
+  // create a metrics registry
+  // @note it's the users responsibility to keep the object alive
+  auto registry = std::make_shared<Registry>();
+  Panel *testPanel = new Panel(1, "192.168.0.10", "one", registry);
+  Panel *testPanel2 = new Panel(1, "192.168.0.11", "two", registry);
+  Panel *testPanel3 = new Panel(1, "192.168.0.12", "three", registry);
+  Panel *testPanel4 = new Panel(1, "192.168.0.13", "four", registry);
+  Panel *testPanel5 = new Panel(1, "192.168.0.14", "five", registry);
+  print("panel done");
+  exposer.RegisterCollectable(registry);
+  
   //for(;;){
     //std::this_thread::sleep_for(std::chrono::seconds(1)); // убрать это при работе с qcoreapp !!! и цикл бесконечный не нужен. а что раз в секунду выполнять это можно через таймера. и нужно через таймера. 
     //testPanel->start_loop_goBabe();
     //std::cout << testPanel->getGammadoze() << std::endl;
   //}
-  print("hello");
   return a.exec();
 }
 
