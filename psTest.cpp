@@ -178,11 +178,6 @@ int main(int argc, char *argv[]) {
   print("panel done");
   exposer.RegisterCollectable(registry);
   
-  //for(;;){
-    //std::this_thread::sleep_for(std::chrono::seconds(1)); // убрать это при работе с qcoreapp !!! и цикл бесконечный не нужен. а что раз в секунду выполнять это можно через таймера. и нужно через таймера. 
-    //testPanel->start_loop_goBabe();
-    //std::cout << testPanel->getGammadoze() << std::endl;
-  //}
   return a.exec();
 }
 
